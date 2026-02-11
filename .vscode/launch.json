@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:rts-mac}",
+            "name": "Debug rts-mac",
+            "target": "rts-mac",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug rts-mac"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:rts-mac}",
+            "name": "Release rts-mac",
+            "target": "rts-mac",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release rts-mac"
+        }
+    ]
+}
