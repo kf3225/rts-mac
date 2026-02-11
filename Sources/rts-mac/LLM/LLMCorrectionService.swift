@@ -32,7 +32,7 @@ internal actor LLMCorrectionService {
         await LLMManager.shared.setCustomSystemPrompt(customSystemPrompt)
         
         if isEnabled, let modelPath = config.llmModelPath {
-            print("[DEBUG] Attempting LLM initialization with model: \(modelPath)")
+            print("[DEBUG] Starting LLM initialization...")
             fflush(stdout)
             
             do {
@@ -62,15 +62,28 @@ internal actor LLMCorrectionService {
     }
     
     func correctText(_ text: String) async -> String {
+        print("[DEBUG] LLMCorrectionService.correctText() called")
+        print("[DEBUG] isEnabled=\(isEnabled), isLLMInitialized=\(isLLMInitialized)")
+        fflush(stdout)
+        
         guard isEnabled, isLLMInitialized else {
+            print("[DEBUG] LLM not enabled or not initialized, returning original text")
+            fflush(stdout)
             return text
         }
         
+        print("[DEBUG] Calling LLMManager.correctText()...")
+        fflush(stdout)
+        
         do {
             let corrected = try await LLMManager.shared.correctText(text)
+            print("[DEBUG] LLM correction completed, returning: \"\(corrected)\"")
+            fflush(stdout)
             return corrected
         } catch {
+            print("[DEBUG] LLM correction error: \(error)")
             print("校正エラー: \(error)")
+            fflush(stdout)
             return text
         }
     }

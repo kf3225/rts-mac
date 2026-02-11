@@ -60,6 +60,8 @@ internal final actor LLMManager {
     
     func correctText(_ text: String) async throws -> String {
         guard isInitialized, let ctx = ctxPtr else {
+            print("[DEBUG] LLM not initialized, throwing error")
+            fflush(stdout)
             throw LLMError.notInitialized
         }
         
@@ -77,7 +79,15 @@ internal final actor LLMManager {
         print("[DEBUG] --- プロンプト構築完了 ---")
         fflush(stdout)
         
-        return try await generateText(prompt: fullPrompt, ctx: ctx)
+        print("[DEBUG] Starting LLM generation...")
+        fflush(stdout)
+        
+        let result = try await generateText(prompt: fullPrompt, ctx: ctx)
+        
+        print("[DEBUG] LLM generation completed: \"\(result)\"")
+        fflush(stdout)
+        
+        return result
     }
     
     func shutdown() {
