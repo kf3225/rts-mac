@@ -16,13 +16,17 @@ struct rts_mac {
             print("CLI config: llmCorrect=\(config.llmCorrect), model=\(config.llmModelPath ?? "nil")")
             fflush(stdout)
             
-            let configTask = Task.detached {
+            let semaphore = DispatchSemaphore(value: 0)
+            
+            Task.detached {
                 await LLMCorrectionService.shared.configure(config: config)
+                semaphore.signal()
             }
             
-            _ = Task.detached {
-                await configTask.value
-            }
+            _ = semaphore.wait(timeout: .distantFuture)
+            
+            print("LLM初期化完了、音声認識を開始します")
+            fflush(stdout)
             
             if #available(macOS 26.0, *) {
                 let analyzer = SpeechAnalyzerImpl(config: config)
@@ -241,10 +245,20 @@ class SpeechRecognizerImpl: NSObject {
 
     private func handleRecognitionResult(_ result: SFSpeechRecognitionResult) async {
         let text = result.bestTranscription.formattedString
+        let isFinal = result.isFinal
+        
+        print("[DEBUG] 音声認識結果受信: text=\"\(text)\", isFinal=\(isFinal)", terminator: "\n")
+        fflush(stdout)
+        
         lastText = text
-
-        if result.isFinal {
+        
+        if isFinal {
+            print("[DEBUG] 発話完了、LLM補正を開始...")
+            fflush(stdout)
+            
             let corrected = await LLMCorrectionService.shared.correctText(text)
+            
+            print("[DEBUG] LLM補正完了: \"\(corrected)\"", terminator: "\n")
             print("\n\(corrected)")
         } else {
             print("\r\(text)", terminator: "")
