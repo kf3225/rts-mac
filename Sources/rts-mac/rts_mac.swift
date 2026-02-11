@@ -14,6 +14,9 @@ struct rts_mac {
             let config = CLIHandler.parseArguments(args)
             
             print("CLI config: llmCorrect=\(config.llmCorrect), model=\(config.llmModelPath ?? "nil")")
+            if let promptFile = config.llmSystemPromptFile {
+                print("systemPromptFile: \(promptFile)")
+            }
             fflush(stdout)
             
             let semaphore = DispatchSemaphore(value: 0)

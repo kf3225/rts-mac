@@ -6,11 +6,28 @@ internal actor LLMCorrectionService {
     
     private var isEnabled = false
     private var isLLMInitialized = false
+    private var customSystemPrompt: String? = nil
     
     private init() {}
     
-    func configure(config: CLIConfig) {
+    func configure(config: CLIConfig) async {
         isEnabled = config.llmCorrect
+        
+        if let promptFile = config.llmSystemPromptFile {
+            do {
+                let fileContents = try String(contentsOfFile: promptFile, encoding: .utf8)
+                customSystemPrompt = fileContents
+                print("システムプロンプトをファイルから読み込みました: \(promptFile)")
+                print("プロンプト（先頭100文字）: \(fileContents.prefix(100))...")
+                fflush(stdout)
+            } catch {
+                print("エラー: システムプロンプトファイルの読み込みに失敗しました: \(error)")
+                print("デフォルトのシステムプロンプトを使用します")
+                fflush(stdout)
+            }
+        }
+        
+        await LLMManager.shared.setCustomSystemPrompt(customSystemPrompt)
         
         if isEnabled, let modelPath = config.llmModelPath {
             Task {

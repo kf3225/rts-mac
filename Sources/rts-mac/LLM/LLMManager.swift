@@ -9,12 +9,17 @@ internal final actor LLMManager {
     private var samplerPtr: OpaquePointer?
     private var isInitialized = false
     private let config: LLMConfig
+    private var customSystemPrompt: String? = nil
     
     private init() {
         self.config = LLMConfig()
     }
     
-    func initialize(modelPath: String, threads: Int32, contextSize: Int32) throws {
+    func setCustomSystemPrompt(_ prompt: String?) {
+        customSystemPrompt = prompt
+    }
+    
+    func initialize(modelPath: String, threads: Int32, contextSize: Int32, customSystemPrompt: String? = nil) throws {
         guard !isInitialized else { return }
         
         llama_backend_init()

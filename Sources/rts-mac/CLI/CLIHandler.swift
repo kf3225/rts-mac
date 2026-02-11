@@ -6,6 +6,7 @@ internal struct CLIConfig {
     var llmModelPath: String?
     var llmThreads: Int32 = 4
     var llmContext: Int32 = 2048
+    var llmSystemPromptFile: String? = nil
 }
 
 @available(macOS 10.15, *)
@@ -41,6 +42,12 @@ internal final class CLIHandler {
                 i += 1
             case "--no-llm":
                 config.llmCorrect = false
+                i += 1
+            case "--llm-system-prompt-file":
+                i += 1
+                if i < args.count {
+                    config.llmSystemPromptFile = args[i]
+                }
                 i += 1
             default:
                 i += 1
