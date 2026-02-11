@@ -64,16 +64,16 @@ internal final actor LLMManager {
         }
         
         let systemPrompt = customSystemPrompt ?? LLMConstants.systemPrompt
-        let prompt = LLMConstants.correctionPrompt + text
-        let fullPrompt = systemPrompt + prompt
+        let userPrompt = LLMConstants.correctionPrompt + text
+        let fullPrompt = "System:\n\(systemPrompt)\n\nUser:\n\(userPrompt)\n\nAssistant:"
         
         let usingCustom = customSystemPrompt != nil
         print("[DEBUG] --- プロンプト構築開始 ---")
         print("[DEBUG] Using custom system prompt: \(usingCustom)")
         print("[DEBUG] System prompt length: \(systemPrompt.count) chars")
-        print("[DEBUG] Correction prompt length: \(prompt.count) chars")
+        print("[DEBUG] User prompt length: \(userPrompt.count) chars")
         print("[DEBUG] Full prompt length: \(fullPrompt.count) chars")
-        print("[DEBUG] Full prompt (first 200 chars): \(fullPrompt.prefix(200))...")
+        print("[DEBUG] Full prompt (first 300 chars): \(fullPrompt.prefix(300))...")
         print("[DEBUG] --- プロンプト構築完了 ---")
         fflush(stdout)
         

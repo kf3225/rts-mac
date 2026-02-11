@@ -12,6 +12,8 @@ internal actor LLMCorrectionService {
     
     func configure(config: CLIConfig) async {
         isEnabled = config.llmCorrect
+        print("[DEBUG] LLMCorrectionService.configure() called, isEnabled=\(isEnabled)")
+        fflush(stdout)
         
         if let promptFile = config.llmSystemPromptFile {
             do {
@@ -30,22 +32,33 @@ internal actor LLMCorrectionService {
         await LLMManager.shared.setCustomSystemPrompt(customSystemPrompt)
         
         if isEnabled, let modelPath = config.llmModelPath {
-            Task {
-                do {
-                    try await LLMManager.shared.initialize(
-                        modelPath: modelPath,
-                        threads: config.llmThreads,
-                        contextSize: config.llmContext
-                    )
-                    
-                    isLLMInitialized = true
-                    print("LLM初期化成功: \(modelPath)")
-                } catch {
-                    print("LLM初期化失敗: \(error)")
-                    isEnabled = false
-                }
+            print("[DEBUG] Attempting LLM initialization with model: \(modelPath)")
+            fflush(stdout)
+            
+            do {
+                try await LLMManager.shared.initialize(
+                    modelPath: modelPath,
+                    threads: config.llmThreads,
+                    contextSize: config.llmContext
+                )
+                
+                isLLMInitialized = true
+                print("[DEBUG] LLM initialization completed successfully")
+                print("LLM初期化成功: \(modelPath)")
+            } catch {
+                print("[DEBUG] LLM initialization failed: \(error)")
+                print("LLM初期化失敗: \(error)")
+                isLLMInitialized = false
+                isEnabled = false
             }
+        } else {
+            print("[DEBUG] LLM not enabled or no model path provided")
+            fflush(stdout)
         }
+        
+        print("[DEBUG] LLMCorrectionService.configure() completed")
+        print("[DEBUG] isEnabled=\(isEnabled), isLLMInitialized=\(isLLMInitialized)")
+        fflush(stdout)
     }
     
     func correctText(_ text: String) async -> String {

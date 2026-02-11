@@ -6,7 +6,6 @@ internal enum LLMConstants {
 """
 
     internal static let systemPrompt = """
-<|system|>
 あなたは日本語テキスト校正の専門家です。
 
 ## 校正ルール
@@ -38,6 +37,5 @@ internal enum LLMConstants {
 ## 期待される出力
 
 修正後のテキストのみを出力してください。メタ情報やコメントを含めないでください。可能な限り短く簡潔にしてください。
-<|system|>
 """
 }
