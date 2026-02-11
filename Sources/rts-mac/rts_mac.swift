@@ -247,21 +247,34 @@ class SpeechRecognizerImpl: NSObject {
         let text = result.bestTranscription.formattedString
         let isFinal = result.isFinal
         
-        print("[DEBUG] 音声認識結果受信: text=\"\(text)\", isFinal=\(isFinal)", terminator: "\n")
-        fflush(stdout)
+        if config.llmCorrect {
+            print("[DEBUG] 音声認識結果受信: text=\"\(text)\", isFinal=\(isFinal)")
+            fflush(stdout)
+        }
         
         lastText = text
         
         if isFinal {
-            print("[DEBUG] 発話完了、LLM補正を開始...")
-            fflush(stdout)
-            
-            let corrected = await LLMCorrectionService.shared.correctText(text)
-            
-            print("[DEBUG] LLM補正完了: \"\(corrected)\"", terminator: "\n")
-            print("\n\(corrected)")
+            if config.llmCorrect {
+                print("[DEBUG] 発話完了、LLM補正を開始...")
+                fflush(stdout)
+                
+                let corrected = await LLMCorrectionService.shared.correctText(text)
+                
+                print("[DEBUG] LLM補正完了")
+                print("\n---")
+                print("元のテキスト: \(text)")
+                print("補正後テキスト: \(corrected)")
+                print("---")
+            } else {
+                print("\n\(text)")
+            }
         } else {
-            print("\r\(text)", terminator: "")
+            if config.llmCorrect {
+                print("\r[認識中...]\(text)", terminator: "")
+            } else {
+                print("\r\(text)", terminator: "")
+            }
         }
         fflush(stdout)
     }

@@ -58,8 +58,15 @@ internal final actor LLMManager {
             throw LLMError.notInitialized
         }
         
-        let prompt = LLMConstants.correctionPrompt + text + "\n修正後:"
-        return try await generateText(prompt: prompt, ctx: ctx)
+        let systemPrompt = LLMConstants.systemPrompt
+        let correctionPrompt = LLMConstants.correctionPrompt + text + "\n\n【出力】修正後のテキスト:"
+        let fullPrompt = systemPrompt + "\n\n" + correctionPrompt
+        
+        print("[DEBUG] プロンプト構築: systemPrompt=\(systemPrompt.prefix(50))...")
+        print("[DEBUG] プロンプト全長: \(fullPrompt.count)文字")
+        fflush(stdout)
+        
+        return try await generateText(prompt: fullPrompt, ctx: ctx)
     }
     
     func shutdown() {

@@ -20,6 +20,7 @@ internal actor LLMCorrectionService {
                         threads: config.llmThreads,
                         contextSize: config.llmContext
                     )
+                    
                     isLLMInitialized = true
                     print("LLM初期化成功: \(modelPath)")
                 } catch {
