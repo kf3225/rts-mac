@@ -41,9 +41,6 @@ internal final actor LLMManager {
             throw LLMError.contextCreationFailed
         }
         
-        let vocab = llama_get_model(ctxPtr)
-        _ = llama_vocab_n_tokens(vocab)
-        
         var samplerParams = llama_sampler_chain_default_params()
         samplerParams.temperature = 0.7
         samplerParams.top_k = 40
