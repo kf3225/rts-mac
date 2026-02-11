@@ -4,13 +4,23 @@ import Speech
 @main
 struct rts_mac {
     static func main() {
-        if #available(macOS 26.0, *) {
-            let analyzer = SpeechAnalyzerImpl()
-            analyzer.start()
-            RunLoop.current.run()
-        } else if #available(macOS 10.15, *) {
-            let recognizer = SpeechRecognizerImpl()
-            recognizer.start()
+        let args = CommandLine.arguments
+        
+        if #available(macOS 10.15, *) {
+            let config = CLIHandler.parseArguments(args)
+            
+            Task {
+                await LLMCorrectionService.shared.configure(config: config)
+            }
+            
+            if #available(macOS 26.0, *) {
+                let analyzer = SpeechAnalyzerImpl(config: config)
+                analyzer.start()
+            } else {
+                let recognizer = SpeechRecognizerImpl(config: config)
+                recognizer.start()
+            }
+            
             RunLoop.current.run()
         } else {
             print("このアプリはmacOS 10.15以降が必要です")
@@ -27,10 +37,12 @@ class SpeechAnalyzerImpl: NSObject {
     private var recognitionTask: SFSpeechRecognitionTask?
     private let speechRecognizer: SFSpeechRecognizer?
     private let speechAnalyzer: Speech.SpeechAnalyzer?
+    private let config: CLIConfig
 
-    override init() {
+    init(config: CLIConfig) {
         self.speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "ja-JP"))
         self.speechAnalyzer = Speech.SpeechAnalyzer(modules: [])
+        self.config = config
         super.init()
         speechRecognizer?.delegate = self
     }
@@ -80,7 +92,9 @@ class SpeechAnalyzerImpl: NSObject {
 
         recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { result, error in
             if let result = result {
-                self.handleRecognitionResult(result)
+                Task {
+                    await self.handleRecognitionResult(result)
+                }
             }
 
             if let error = error {
@@ -104,11 +118,12 @@ class SpeechAnalyzerImpl: NSObject {
         }
     }
 
-    private func handleRecognitionResult(_ result: SFSpeechRecognitionResult) {
+    private func handleRecognitionResult(_ result: SFSpeechRecognitionResult) async {
         let text = result.bestTranscription.formattedString
 
         if result.isFinal {
-            print("\n\(text)")
+            let corrected = await LLMCorrectionService.shared.correctText(text)
+            print("\n\(corrected)")
         } else {
             print("\r\(text)", terminator: "")
         }
@@ -132,9 +147,12 @@ class SpeechRecognizerImpl: NSObject {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private let speechRecognizer: SFSpeechRecognizer?
+    private let config: CLIConfig
+    private var lastText = ""
 
-    override init() {
+    init(config: CLIConfig) {
         self.speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "ja-JP"))
+        self.config = config
         super.init()
         speechRecognizer?.delegate = self
     }
@@ -180,12 +198,13 @@ class SpeechRecognizerImpl: NSObject {
         self.recognitionRequest = recognitionRequest
 
         recognitionRequest.shouldReportPartialResults = true
+        recognitionRequest.requiresOnDeviceRecognition = true
 
         recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { result, error in
             if let result = result {
-                let text = result.bestTranscription.formattedString
-                print("\r\(text)", terminator: "")
-                fflush(stdout)
+                Task {
+                    await self.handleRecognitionResult(result)
+                }
             }
 
             if let error = error {
@@ -207,6 +226,19 @@ class SpeechRecognizerImpl: NSObject {
             print("Audio engine error: \(error)")
             exit(1)
         }
+    }
+
+    private func handleRecognitionResult(_ result: SFSpeechRecognitionResult) async {
+        let text = result.bestTranscription.formattedString
+        lastText = text
+
+        if result.isFinal {
+            let corrected = await LLMCorrectionService.shared.correctText(text)
+            print("\n\(corrected)")
+        } else {
+            print("\r\(text)", terminator: "")
+        }
+        fflush(stdout)
     }
 
     private func stopRecognition() {
