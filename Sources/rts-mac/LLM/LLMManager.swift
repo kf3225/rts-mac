@@ -47,7 +47,8 @@ internal final actor LLMManager {
         samplerParams.top_p = 0.95
         
         samplerPtr = llama_sampler_chain_init(ctxPtr, &samplerParams)
-        llama_set_sampler(ctxPtr, samplerPtr)
+        let seqId: Int32 = 0
+        llama_set_sampler(ctxPtr, seqId, samplerPtr)
         
         isInitialized = true
     }

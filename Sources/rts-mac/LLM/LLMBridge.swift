@@ -96,7 +96,8 @@ internal func llama_sampler_free(_ sampler: OpaquePointer?)
 @_silgen_name("llama_set_sampler")
 internal func llama_set_sampler(
     _ ctx: OpaquePointer?,
-    _ sampler: OpaquePointer?
+    _ seq_id: Int32,
+    _ smpl: OpaquePointer?
 )
 
 @_silgen_name("llama_get_sampled_token_ith")
