@@ -4,9 +4,13 @@ import Speech
 @main
 struct rts_mac {
     static func main() {
-        if #available(macOS 10.15, *) {
-            let adapter = SpeechAdapter()
-            adapter.start()
+        if #available(macOS 26.0, *) {
+            let analyzer = SpeechAnalyzerImpl()
+            analyzer.start()
+            RunLoop.current.run()
+        } else if #available(macOS 10.15, *) {
+            let recognizer = SpeechRecognizerImpl()
+            recognizer.start()
             RunLoop.current.run()
         } else {
             print("このアプリはmacOS 10.15以降が必要です")
@@ -15,9 +19,115 @@ struct rts_mac {
     }
 }
 
+@available(macOS 26.0, *)
+@MainActor
+class SpeechAnalyzerImpl: NSObject {
+    private var audioEngine: AVAudioEngine?
+    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var recognitionTask: SFSpeechRecognitionTask?
+    private let speechRecognizer: SFSpeechRecognizer?
+    private let speechAnalyzer: Speech.SpeechAnalyzer?
+
+    override init() {
+        self.speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "ja-JP"))
+        self.speechAnalyzer = Speech.SpeechAnalyzer(modules: [])
+        super.init()
+        speechRecognizer?.delegate = self
+    }
+
+    func start() {
+        requestAuthorization()
+    }
+
+    private func requestAuthorization() {
+        SFSpeechRecognizer.requestAuthorization { authStatus in
+            switch authStatus {
+            case .authorized:
+                print("認証に成功しました (SpeechAnalyzer)")
+                self.startRecognition()
+            case .denied:
+                print("認証が拒否されました")
+                exit(1)
+            case .restricted, .notDetermined:
+                print("認証できませんでした")
+                exit(1)
+            @unknown default:
+                print("不明なエラー")
+                exit(1)
+            }
+        }
+    }
+
+    private func startRecognition() {
+        guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
+            print("音声認識が利用できません")
+            exit(1)
+        }
+
+        recognitionTask?.cancel()
+        recognitionTask = nil
+
+        let audioEngine = AVAudioEngine()
+        self.audioEngine = audioEngine
+
+        let inputNode = audioEngine.inputNode
+
+        let recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
+        self.recognitionRequest = recognitionRequest
+
+        recognitionRequest.shouldReportPartialResults = true
+        recognitionRequest.requiresOnDeviceRecognition = true
+
+        recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { result, error in
+            if let result = result {
+                self.handleRecognitionResult(result)
+            }
+
+            if let error = error {
+                print("\nError: \(error)")
+                self.stopRecognition()
+            }
+        }
+
+        let recordingFormat = inputNode.outputFormat(forBus: 0)
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
+            self.recognitionRequest?.append(buffer)
+        }
+
+        audioEngine.prepare()
+        do {
+            try audioEngine.start()
+            print("聞き取り中... (Ctrl+Cで終了)")
+        } catch {
+            print("Audio engine error: \(error)")
+            exit(1)
+        }
+    }
+
+    private func handleRecognitionResult(_ result: SFSpeechRecognitionResult) {
+        let text = result.bestTranscription.formattedString
+
+        if result.isFinal {
+            print("\n\(text)")
+        } else {
+            print("\r\(text)", terminator: "")
+        }
+        fflush(stdout)
+    }
+
+    private func stopRecognition() {
+        audioEngine?.stop()
+        audioEngine?.inputNode.removeTap(onBus: 0)
+        recognitionRequest?.endAudio()
+        recognitionRequest = nil
+        recognitionTask?.cancel()
+        recognitionTask = nil
+    }
+}
+
 @available(macOS 10.15, *)
 @MainActor
-class SpeechAdapter: NSObject {
+class SpeechRecognizerImpl: NSObject {
     private var audioEngine: AVAudioEngine?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
@@ -37,7 +147,7 @@ class SpeechAdapter: NSObject {
         SFSpeechRecognizer.requestAuthorization { authStatus in
             switch authStatus {
             case .authorized:
-                print("認証に成功しました")
+                print("認証に成功しました (SpeechRecognizer)")
                 self.startRecognition()
             case .denied:
                 print("認証が拒否されました")
@@ -110,7 +220,7 @@ class SpeechAdapter: NSObject {
 }
 
 @available(macOS 10.15, *)
-extension SpeechAdapter: SFSpeechRecognizerDelegate {
+extension SpeechRecognizerImpl: SFSpeechRecognizerDelegate {
     nonisolated func speechRecognizer(_ speechRecognizer: SFSpeechRecognizer, availabilityDidChange available: Bool) {
         if available {
             print("音声認識が利用可能です")
@@ -120,12 +230,13 @@ extension SpeechAdapter: SFSpeechRecognizerDelegate {
     }
 }
 
-#if canImport(SpeechAnalyzer)
-import SpeechAnalyzer
-
-@available(macOS 15.0, *)
-extension SpeechAdapter {
-    func startWithSpeechAnalyzer() {
+@available(macOS 26.0, *)
+extension SpeechAnalyzerImpl: SFSpeechRecognizerDelegate {
+    nonisolated func speechRecognizer(_ speechRecognizer: SFSpeechRecognizer, availabilityDidChange available: Bool) {
+        if available {
+            print("音声認識が利用可能です")
+        } else {
+            print("音声認識が利用できません")
+        }
     }
 }
-#endif
