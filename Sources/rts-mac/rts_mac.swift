@@ -5,8 +5,8 @@ import Speech
 struct rts_mac {
     static func main() {
         if #available(macOS 10.15, *) {
-            let recognizer = SpeechRecognizer()
-            recognizer.start()
+            let adapter = SpeechAdapter()
+            adapter.start()
             RunLoop.current.run()
         } else {
             print("このアプリはmacOS 10.15以降が必要です")
@@ -17,7 +17,7 @@ struct rts_mac {
 
 @available(macOS 10.15, *)
 @MainActor
-class SpeechRecognizer: NSObject {
+class SpeechAdapter: NSObject {
     private var audioEngine: AVAudioEngine?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
@@ -97,8 +97,6 @@ class SpeechRecognizer: NSObject {
             print("Audio engine error: \(error)")
             exit(1)
         }
-
-        RunLoop.current.run()
     }
 
     private func stopRecognition() {
@@ -112,7 +110,7 @@ class SpeechRecognizer: NSObject {
 }
 
 @available(macOS 10.15, *)
-extension SpeechRecognizer: SFSpeechRecognizerDelegate {
+extension SpeechAdapter: SFSpeechRecognizerDelegate {
     nonisolated func speechRecognizer(_ speechRecognizer: SFSpeechRecognizer, availabilityDidChange available: Bool) {
         if available {
             print("音声認識が利用可能です")
@@ -121,3 +119,13 @@ extension SpeechRecognizer: SFSpeechRecognizerDelegate {
         }
     }
 }
+
+#if canImport(SpeechAnalyzer)
+import SpeechAnalyzer
+
+@available(macOS 15.0, *)
+extension SpeechAdapter {
+    func startWithSpeechAnalyzer() {
+    }
+}
+#endif
