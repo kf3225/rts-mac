@@ -6,6 +6,7 @@ internal final actor LLMManager {
     
     private var modelPtr: OpaquePointer?
     private var ctxPtr: OpaquePointer?
+    private var samplerPtr: OpaquePointer?
     private var isInitialized = false
     private let config: LLMConfig
     
@@ -16,15 +17,40 @@ internal final actor LLMManager {
     func initialize(modelPath: String, threads: Int32, contextSize: Int32) throws {
         guard !isInitialized else { return }
         
-        modelPtr = try loadModel(path: modelPath)
+        llama_backend_init()
+        
+        var modelParams = llama_model_default_params()
+        modelParams.n_gpu_layers = 0
+        modelParams.use_mmap = true
+        
+        modelPtr = try loadModel(path: modelPath, params: &modelParams)
         guard modelPtr != nil else {
+            llama_backend_free()
             throw LLMError.modelLoadFailed
         }
         
-        ctxPtr = try createContext(threads: threads, contextSize: contextSize)
+        var ctxParams = llama_context_default_params()
+        ctxParams.n_ctx = UInt32(contextSize)
+        ctxParams.n_threads = UInt32(threads)
+        
+        ctxPtr = try createContext(threads: threads, contextSize: contextSize, params: &ctxParams)
         guard ctxPtr != nil else {
+            llama_model_free(modelPtr)
+            modelPtr = nil
+            llama_backend_free()
             throw LLMError.contextCreationFailed
         }
+        
+        let vocab = llama_get_model(ctxPtr)
+        _ = llama_vocab_n_tokens(vocab)
+        
+        var samplerParams = llama_sampler_chain_default_params()
+        samplerParams.temperature = 0.7
+        samplerParams.top_k = 40
+        samplerParams.top_p = 0.95
+        
+        samplerPtr = llama_sampler_chain_init(ctxPtr, &samplerParams)
+        llama_set_sampler(ctxPtr, samplerPtr)
         
         isInitialized = true
     }
@@ -41,37 +67,36 @@ internal final actor LLMManager {
     func shutdown() {
         guard isInitialized else { return }
         
+        if let sampler = samplerPtr {
+            llama_sampler_free(sampler)
+            samplerPtr = nil
+        }
+        
         if let ctx = ctxPtr {
-            llama_free_impl(ctx)
+            llama_free(ctx)
             ctxPtr = nil
         }
         
         if let model = modelPtr {
-            llama_free_model_impl(model)
+            llama_model_free(model)
             modelPtr = nil
         }
         
+        llama_backend_free()
         isInitialized = false
     }
     
-    private func loadModel(path: String) throws -> OpaquePointer? {
-        guard let ptr = path.withCString({ cPath in
-            llama_init_from_file_simple(cPath)
-        }) else {
-            throw LLMError.modelLoadFailed
+    private func loadModel(path: String, params: UnsafePointer<llama_model_params>) throws -> OpaquePointer? {
+        return path.withCString { cPath in
+            llama_model_load_from_file(cPath, params)
         }
-        return ptr
     }
     
-    private func createContext(threads: Int32, contextSize: Int32) throws -> OpaquePointer? {
+    private func createContext(threads: Int32, contextSize: Int32, params: UnsafePointer<llama_context_params>) throws -> OpaquePointer? {
         guard let model = modelPtr else {
             throw LLMError.modelLoadFailed
         }
-        
-        guard let ctx = llama_new_context_with_model_simple(model, threads, contextSize) else {
-            throw LLMError.contextCreationFailed
-        }
-        return ctx
+        return llama_init_from_model(model, params)
     }
     
     private func generateText(prompt: String, ctx: OpaquePointer) async throws -> String {
@@ -79,36 +104,61 @@ internal final actor LLMManager {
         
         try prompt.withCString { cPrompt in
             let promptLen = Int32(strlen(cPrompt))
-            var tokens: [Int32] = Array(repeating: 0, count: 4096)
+            var tokens: [llama_token] = Array(repeating: 0, count: 4096)
             
-            let tokenCount = llama_tokenize_simple(ctx, cPrompt, promptLen, &tokens, 4096, true, false)
+            let tokenCount = llama_tokenize(ctx, cPrompt, promptLen, &tokens, 4096, true, false)
             
-            var nPast = Int32(0)
-            let eos = llama_token_eos_impl(ctx)
+            let eos = llama_token_eos(ctx)
             
-            for i in 0..<tokenCount {
-                try llama_decode_simple(ctx, tokens[Int(i)], nPast)
-                nPast += 1
-            }
+            var batch = llama_batch_init(Int32(min(tokenCount, 512)), 0, 1)
+            defer { llama_batch_free(batch) }
             
-            var generated = 0
-            while generated < 512 {
-                let token = try llama_sample_token_greedy_impl(ctx, eos)
-                
-                if token == eos {
-                    break
+            if let batchToken = batch.token, let batchPos = batch.pos, let batchNS = batch.n_seq_id, let batchSeq = batch.seq_id, let batchLogits = batch.logits {
+                for i in 0..<Int(tokenCount) {
+                    batch.n_tokens = Int32(i + 1)
+                    batchToken.advanced(by: i).pointee = tokens[i]
+                    batchPos.advanced(by: i).pointee = Int32(i)
+                    batchNS.advanced(by: i).pointee = 1
+                    batchSeq.advanced(by: i).pointee?.advanced(by: 0).pointee = 0
+                    batchLogits.advanced(by: i).pointee = (i == Int(tokenCount) - 1) ? 1 : 0
+                    
+                    let ret = llama_decode(ctx, &batch)
+                    if ret != 0 {
+                        throw LLMError.generationFailed
+                    }
                 }
                 
-                var pieceBuffer: [CChar] = Array(repeating: 0, count: 256)
-                let pieceLen = llama_token_to_piece_impl(ctx, token, &pieceBuffer, 255)
-                
-                if pieceLen > 0, let piece = String.init(validatingCString: &pieceBuffer) {
-                    result += piece
+                var generated = 0
+                while generated < 512 {
+                    var token = llama_get_sampled_token(ctx)
+                    
+                    if token == eos {
+                        break
+                    }
+                    
+                    var pieceBuffer: [CChar] = Array(repeating: 0, count: 512)
+                    let pieceLen = llama_detokenize(ctx, &token, 1, &pieceBuffer, 512)
+                    
+                    if pieceLen > 0, let piece = String(validatingCString: &pieceBuffer) {
+                        result += piece
+                    }
+                    
+                    batch.n_tokens = 1
+                    batchToken.pointee = token
+                    batchPos.pointee = Int32(Int(tokenCount) + generated)
+                    batchNS.pointee = 1
+                    batchSeq.pointee?.pointee = 0
+                    batchLogits.pointee = 0
+                    
+                    let ret = llama_decode(ctx, &batch)
+                    if ret != 0 {
+                        throw LLMError.generationFailed
+                    }
+                    
+                    generated += 1
                 }
-                
-                try llama_decode_simple(ctx, token, nPast)
-                nPast += 1
-                generated += 1
+            } else {
+                throw LLMError.generationFailed
             }
         }
         
@@ -128,83 +178,3 @@ internal struct LLMConfig {
     var threads: Int32 = 4
     var contextSize: Int32 = 2048
 }
-
-@_silgen_name("llama_init_from_file")
-private func llama_init_from_file_simple(
-    _ path: UnsafePointer<CChar>,
-    _ n_gpu_layers: Int32 = 0,
-    _ main_gpu: Int32 = 0,
-    _ vocab_only: Bool = false,
-    _ use_mmap: Bool = true,
-    _ use_mlock: Bool = false,
-    _ progress: Int32 = 0,
-    _ progress_data: Int32 = 0
-) -> OpaquePointer?
-
-@_silgen_name("llama_new_context_with_model")
-private func llama_new_context_with_model_simple(
-    _ model: OpaquePointer,
-    _ n_threads: Int32 = 4,
-    _ n_batch: Int32 = 512,
-    _ n_gpu_layers: Int32 = 0,
-    _ main_gpu: Int32 = 0,
-    _ tensor_split: UnsafeMutablePointer<Float>? = nil,
-    _ f16_kv: Bool = true,
-    _ logits_all: Bool = false,
-    _ embedding: Bool = false,
-    _ use_mmap: Bool = true,
-    _ use_mlock: Bool = false,
-    _ n_threads_batch: Int32 = 4,
-    _ rope_freq_base: Float = 10000.0,
-    _ rope_freq_scale: Float = 1.0,
-    _ mul_mat_q: Bool = true,
-    _ type_k: Int32 = 0,
-    _ type_v: Int32 = 0
-) -> OpaquePointer?
-
-@_silgen_name("llama_free")
-internal func llama_free_impl(_ ctx: OpaquePointer?)
-
-@_silgen_name("llama_free_model")
-internal func llama_free_model_impl(_ model: OpaquePointer?)
-
-@_silgen_name("llama_tokenize")
-private func llama_tokenize_simple(
-    _ ctx: OpaquePointer,
-    _ text: UnsafePointer<CChar>,
-    _ text_len: Int32,
-    _ tokens: UnsafeMutablePointer<Int32>,
-    _ n_max_tokens: Int32,
-    _ add_bos: Bool,
-    _ special: Bool
-) -> Int32
-
-@_silgen_name("llama_decode")
-private func llama_decode_simple(
-    _ ctx: OpaquePointer,
-    _ token: Int32,
-    _ n_past: Int32
-) throws
-
-@_silgen_name("llama_sample_token_greedy")
-private func llama_sample_token_greedy_impl(
-    _ ctx: OpaquePointer,
-    _ eos: Int32
-) throws -> Int32
-
-@_silgen_name("llama_token_to_piece")
-private func llama_token_to_piece_impl(
-    _ ctx: OpaquePointer,
-    _ token: Int32,
-    _ buf: UnsafeMutablePointer<CChar>,
-    _ length: Int32
-) -> Int32
-
-@_silgen_name("llama_token_bos")
-private func llama_token_bos_impl(_ ctx: OpaquePointer) -> Int32
-
-@_silgen_name("llama_token_eos")
-private func llama_token_eos_impl(_ ctx: OpaquePointer) -> Int32
-
-@_silgen_name("llama_get_logits")
-private func llama_get_logits_impl(_ ctx: OpaquePointer) -> UnsafeMutablePointer<Float>?
