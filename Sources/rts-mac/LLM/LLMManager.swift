@@ -63,12 +63,15 @@ internal final actor LLMManager {
             throw LLMError.notInitialized
         }
         
-        let systemPrompt = LLMConstants.systemPrompt
-        let correctionPrompt = LLMConstants.correctionPrompt + text + "\n\n【出力】修正後のテキスト:"
-        let fullPrompt = systemPrompt + "\n\n" + correctionPrompt
+        let prompt = LLMConstants.correctionPrompt + text
+        let fullPrompt = LLMConstants.systemPrompt + prompt
         
-        print("[DEBUG] プロンプト構築: systemPrompt=\(systemPrompt.prefix(50))...")
-        print("[DEBUG] プロンプト全長: \(fullPrompt.count)文字")
+        print("[DEBUG] --- プロンプト構築開始 ---")
+        print("[DEBUG] System prompt length: \(LLMConstants.systemPrompt.count) chars")
+        print("[DEBUG] Correction prompt length: \(prompt.count) chars")
+        print("[DEBUG] Full prompt length: \(fullPrompt.count) chars")
+        print("[DEBUG] Full prompt (first 200 chars): \(fullPrompt.prefix(200))...")
+        print("[DEBUG] --- プロンプト構築完了 ---")
         fflush(stdout)
         
         return try await generateText(prompt: fullPrompt, ctx: ctx)
@@ -120,6 +123,10 @@ internal final actor LLMManager {
             
             let eos = llama_token_eos(ctx)
             
+            print("[DEBUG] Tokenizing prompt...")
+            print("[DEBUG] Prompt length: \(promptLen) chars, \(tokenCount) tokens")
+            fflush(stdout)
+            
             var batch = llama_batch_init(Int32(min(tokenCount, 512)), 0, 1)
             defer { llama_batch_free(batch) }
             
@@ -139,10 +146,17 @@ internal final actor LLMManager {
                 }
                 
                 var generated = 0
-                while generated < 512 {
+                let maxGenerated = 2048
+                
+                print("[DEBUG] Starting generation, max tokens: \(maxGenerated)...")
+                fflush(stdout)
+                
+                while generated < maxGenerated {
                     var token = llama_get_sampled_token_ith(ctx, 0)
                     
                     if token == eos {
+                        print("[DEBUG] EOS token reached at generation \(generated)")
+                        fflush(stdout)
                         break
                     }
                     
@@ -151,6 +165,11 @@ internal final actor LLMManager {
                     
                     if pieceLen > 0, let piece = String(validatingCString: &pieceBuffer) {
                         result += piece
+                        
+                        if generated % 50 == 0 {
+                            print("[DEBUG] Generated \(generated) tokens, current result: \"\(result.prefix(50))...\"")
+                            fflush(stdout)
+                        }
                     }
                     
                     batch.n_tokens = 1
@@ -167,6 +186,10 @@ internal final actor LLMManager {
                     
                     generated += 1
                 }
+                
+                print("[DEBUG] Generation completed: \(generated) tokens, \(result.count) chars")
+                print("[DEBUG] Final result: \"\(result)\"")
+                fflush(stdout)
             } else {
                 throw LLMError.generationFailed
             }
