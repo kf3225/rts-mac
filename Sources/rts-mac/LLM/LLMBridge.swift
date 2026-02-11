@@ -99,8 +99,8 @@ internal func llama_set_sampler(
     _ sampler: OpaquePointer?
 )
 
-@_silgen_name("llama_get_sampled_token")
-internal func llama_get_sampled_token(_ ctx: OpaquePointer?) -> llama_token
+@_silgen_name("llama_get_sampled_token_ith")
+internal func llama_get_sampled_token_ith(_ ctx: OpaquePointer?, _ i: Int32) -> llama_token
 
 internal typealias llama_token = Int32
 

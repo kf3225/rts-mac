@@ -130,7 +130,7 @@ internal final actor LLMManager {
                 
                 var generated = 0
                 while generated < 512 {
-                    var token = llama_get_sampled_token(ctx)
+                    var token = llama_get_sampled_token_ith(ctx, 0)
                     
                     if token == eos {
                         break

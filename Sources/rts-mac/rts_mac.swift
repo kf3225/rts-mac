@@ -1,16 +1,27 @@
 import AVFoundation
 import Speech
+import Foundation
 
 @main
 struct rts_mac {
     static func main() {
+        setbuf(stdout, nil)
+        setbuf(stderr, nil)
+        
         let args = CommandLine.arguments
         
         if #available(macOS 10.15, *) {
             let config = CLIHandler.parseArguments(args)
             
-            Task {
+            print("CLI config: llmCorrect=\(config.llmCorrect), model=\(config.llmModelPath ?? "nil")")
+            fflush(stdout)
+            
+            let configTask = Task.detached {
                 await LLMCorrectionService.shared.configure(config: config)
+            }
+            
+            _ = Task.detached {
+                await configTask.value
             }
             
             if #available(macOS 26.0, *) {

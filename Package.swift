@@ -14,9 +14,14 @@ let package = Package(
                 .unsafeFlags(["-I/usr/local/include", "-I/opt/homebrew/include"]),
             ],
             linkerSettings: [
-                .unsafeFlags(["-L/usr/local/lib", "-L/opt/homebrew/lib", "-Xlinker", "-undefined", "-Xlinker", "dynamic_lookup"]),
+                .unsafeFlags([
+                    "-L/usr/local/lib", 
+                    "-L/opt/homebrew/lib"
+                ]),
+                .linkedLibrary("llama", .when(platforms: [.macOS]))
             ]
         ),
     ]
 )
+
 
