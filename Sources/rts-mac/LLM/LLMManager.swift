@@ -63,11 +63,14 @@ internal final actor LLMManager {
             throw LLMError.notInitialized
         }
         
+        let systemPrompt = customSystemPrompt ?? LLMConstants.systemPrompt
         let prompt = LLMConstants.correctionPrompt + text
-        let fullPrompt = LLMConstants.systemPrompt + prompt
+        let fullPrompt = systemPrompt + prompt
         
+        let usingCustom = customSystemPrompt != nil
         print("[DEBUG] --- プロンプト構築開始 ---")
-        print("[DEBUG] System prompt length: \(LLMConstants.systemPrompt.count) chars")
+        print("[DEBUG] Using custom system prompt: \(usingCustom)")
+        print("[DEBUG] System prompt length: \(systemPrompt.count) chars")
         print("[DEBUG] Correction prompt length: \(prompt.count) chars")
         print("[DEBUG] Full prompt length: \(fullPrompt.count) chars")
         print("[DEBUG] Full prompt (first 200 chars): \(fullPrompt.prefix(200))...")
