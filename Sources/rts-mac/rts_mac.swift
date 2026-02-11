@@ -4,11 +4,19 @@ import Speech
 @main
 struct rts_mac {
     static func main() {
-        let recognizer = SpeechRecognizer()
-        recognizer.start()
+        if #available(macOS 10.15, *) {
+            let recognizer = SpeechRecognizer()
+            recognizer.start()
+            RunLoop.current.run()
+        } else {
+            print("このアプリはmacOS 10.15以降が必要です")
+            exit(1)
+        }
     }
 }
 
+@available(macOS 10.15, *)
+@MainActor
 class SpeechRecognizer: NSObject {
     private var audioEngine: AVAudioEngine?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
@@ -27,35 +35,20 @@ class SpeechRecognizer: NSObject {
 
     private func requestAuthorization() {
         SFSpeechRecognizer.requestAuthorization { authStatus in
-            DispatchQueue.main.async {
-                switch authStatus {
-                case .authorized:
-                    print("認証に成功しました")
-                    self.setupAudioSession()
-                case .denied:
-                    print("認証が拒否されました")
-                    exit(1)
-                case .restricted, .notDetermined:
-                    print("認証できませんでした")
-                    exit(1)
-                @unknown default:
-                    print("不明なエラー")
-                    exit(1)
-                }
+            switch authStatus {
+            case .authorized:
+                print("認証に成功しました")
+                self.startRecognition()
+            case .denied:
+                print("認証が拒否されました")
+                exit(1)
+            case .restricted, .notDetermined:
+                print("認証できませんでした")
+                exit(1)
+            @unknown default:
+                print("不明なエラー")
+                exit(1)
             }
-        }
-    }
-
-    private func setupAudioSession() {
-        let audioSession = AVAudioSession.sharedInstance()
-
-        do {
-            try audioSession.setCategory(.record, mode: .measurement, options: .duckOthers)
-            try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
-            startRecognition()
-        } catch {
-            print("Audio session error: \(error)")
-            exit(1)
         }
     }
 
@@ -118,8 +111,9 @@ class SpeechRecognizer: NSObject {
     }
 }
 
+@available(macOS 10.15, *)
 extension SpeechRecognizer: SFSpeechRecognizerDelegate {
-    func speechRecognizer(_ speechRecognizer: SFSpeechRecognizer, availabilityDidChange available: Bool) {
+    nonisolated func speechRecognizer(_ speechRecognizer: SFSpeechRecognizer, availabilityDidChange available: Bool) {
         if available {
             print("音声認識が利用可能です")
         } else {
