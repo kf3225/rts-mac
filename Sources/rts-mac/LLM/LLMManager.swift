@@ -36,7 +36,8 @@ internal final actor LLMManager {
         
         var ctxParams = llama_context_default_params()
         ctxParams.n_ctx = UInt32(contextSize)
-        ctxParams.n_threads = UInt32(threads)
+        ctxParams.n_threads = threads
+        ctxParams.n_threads_batch = threads
         
         ctxPtr = try createContext(threads: threads, contextSize: contextSize, params: &ctxParams)
         guard ctxPtr != nil else {
@@ -46,14 +47,10 @@ internal final actor LLMManager {
             throw LLMError.contextCreationFailed
         }
         
-        var samplerParams = llama_sampler_chain_default_params()
-        samplerParams.temperature = 0.7
-        samplerParams.top_k = 40
-        samplerParams.top_p = 0.95
-        
-        samplerPtr = llama_sampler_chain_init(ctxPtr, &samplerParams)
+        let samplerParams = llama_sampler_chain_default_params()
+        samplerPtr = llama_sampler_chain_init(samplerParams)
         let seqId: Int32 = 0
-        llama_set_sampler(ctxPtr, seqId, samplerPtr)
+        _ = llama_set_sampler(ctxPtr, seqId, samplerPtr)
         
         isInitialized = true
     }
@@ -66,8 +63,20 @@ internal final actor LLMManager {
         }
         
         let systemPrompt = customSystemPrompt ?? LLMConstants.systemPrompt
-        let userPrompt = LLMConstants.correctionPrompt + text
-        let fullPrompt = "System:\n\(systemPrompt)\n\nUser:\n\(userPrompt)\n\nAssistant:"
+        let userPrompt = """
+あなたは以下のルールを厳密に守ってください。
+
+[ルール]
+\(systemPrompt)
+
+[入力テキスト]
+\(text)
+
+[出力形式]
+- 修正後のテキスト本文のみを返す
+- 説明、注釈、見出し、引用符を付けない
+"""
+        let fullPrompt = userPrompt + "\n\n修正後テキスト:\n"
         
         let usingCustom = customSystemPrompt != nil
         print("[DEBUG] --- プロンプト構築開始 ---")
@@ -87,7 +96,17 @@ internal final actor LLMManager {
         print("[DEBUG] LLM generation completed: \"\(result)\"")
         fflush(stdout)
         
-        return result
+        let cleaned = result
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\0", with: "")
+        
+        guard !cleaned.isEmpty else {
+            print("[DEBUG] Empty correction output, returning original text")
+            fflush(stdout)
+            return text
+        }
+        
+        return cleaned
     }
     
     func shutdown() {
@@ -128,87 +147,162 @@ internal final actor LLMManager {
     private func generateText(prompt: String, ctx: OpaquePointer) async throws -> String {
         var result = ""
         
-        try prompt.withCString { cPrompt in
-            let promptLen = Int32(strlen(cPrompt))
-            var tokens: [llama_token] = Array(repeating: 0, count: 4096)
+        if let memory = llama_get_memory(ctx) {
+            llama_memory_clear(memory, true)
+        }
+        
+        guard let model = llama_get_model(ctx), let vocab = llama_model_get_vocab(model) else {
+            throw LLMError.generationFailed
+        }
+        let vocabSize = Int(llama_vocab_n_tokens(vocab))
+        guard vocabSize > 0 else {
+            throw LLMError.generationFailed
+        }
+        
+        guard let cPrompt = strdup(prompt) else {
+            throw LLMError.generationFailed
+        }
+        defer { free(cPrompt) }
+        
+        let promptLen = Int32(strlen(cPrompt))
+        var tokens: [llama_token] = Array(repeating: 0, count: 4096)
+        var tokenCount = llama_tokenize(
+            vocab,
+            cPrompt,
+            promptLen,
+            &tokens,
+            Int32(tokens.count),
+            true,
+            false
+        )
+        if tokenCount < 0 {
+            let required = Int(-tokenCount)
+            tokens = Array(repeating: 0, count: required)
+            tokenCount = llama_tokenize(
+                vocab,
+                cPrompt,
+                promptLen,
+                &tokens,
+                Int32(tokens.count),
+                true,
+                false
+            )
+        }
+        guard tokenCount > 0 else {
+            throw LLMError.generationFailed
+        }
+        
+        let eos = llama_token_eos(vocab)
+        
+        print("[DEBUG] Tokenizing prompt...")
+        print("[DEBUG] Prompt length: \(promptLen) chars, \(tokenCount) tokens")
+        fflush(stdout)
+        
+        let batchSize = Int32(min(tokenCount, 512))
+        var batch = llama_batch_init(batchSize, 0, 1)
+        defer { llama_batch_free(batch) }
+        
+        if let batchToken = batch.token, let batchPos = batch.pos, let batchNS = batch.n_seq_id, let batchSeq = batch.seq_id, let batchLogits = batch.logits {
+            var consumed = 0
+            while consumed < Int(tokenCount) {
+                let chunkSize = min(Int(batchSize), Int(tokenCount) - consumed)
+                batch.n_tokens = Int32(chunkSize)
+                
+                for j in 0..<chunkSize {
+                    let idx = consumed + j
+                    batchToken.advanced(by: j).pointee = tokens[idx]
+                    batchPos.advanced(by: j).pointee = Int32(idx)
+                    batchNS.advanced(by: j).pointee = 1
+                    batchSeq.advanced(by: j).pointee?.pointee = 0
+                    batchLogits.advanced(by: j).pointee = (idx == Int(tokenCount) - 1) ? 1 : 0
+                }
+                
+                let ret = llama_decode(ctx, &batch)
+                if ret != 0 {
+                    throw LLMError.generationFailed
+                }
+                
+                consumed += chunkSize
+            }
             
-            let tokenCount = llama_tokenize(ctx, cPrompt, promptLen, &tokens, 4096, true, false)
+            var generated = 0
+            let maxGenerated = 2048
             
-            let eos = llama_token_eos(ctx)
-            
-            print("[DEBUG] Tokenizing prompt...")
-            print("[DEBUG] Prompt length: \(promptLen) chars, \(tokenCount) tokens")
+            print("[DEBUG] Starting generation, max tokens: \(maxGenerated)...")
             fflush(stdout)
             
-            var batch = llama_batch_init(Int32(min(tokenCount, 512)), 0, 1)
-            defer { llama_batch_free(batch) }
-            
-            if let batchToken = batch.token, let batchPos = batch.pos, let batchNS = batch.n_seq_id, let batchSeq = batch.seq_id, let batchLogits = batch.logits {
-                for i in 0..<Int(tokenCount) {
-                    batch.n_tokens = Int32(i + 1)
-                    batchToken.advanced(by: i).pointee = tokens[i]
-                    batchPos.advanced(by: i).pointee = Int32(i)
-                    batchNS.advanced(by: i).pointee = 1
-                    batchSeq.advanced(by: i).pointee?.advanced(by: 0).pointee = 0
-                    batchLogits.advanced(by: i).pointee = (i == Int(tokenCount) - 1) ? 1 : 0
-                    
-                    let ret = llama_decode(ctx, &batch)
-                    if ret != 0 {
-                        throw LLMError.generationFailed
-                    }
+            while generated < maxGenerated {
+                var token = llama_get_sampled_token_ith(ctx, 0)
+                if token == llama_token_null {
+                    // Fallback: backend sampler may return null if sampler chain is empty/misconfigured.
+                    token = greedySampleFromLogits(ctx: ctx, vocabSize: vocabSize)
+                }
+                if token < 0 || Int(token) >= vocabSize {
+                    print("[DEBUG] Invalid token sampled: \(token), stopping generation")
+                    fflush(stdout)
+                    break
                 }
                 
-                var generated = 0
-                let maxGenerated = 2048
+                if token == eos {
+                    print("[DEBUG] EOS token reached at generation \(generated)")
+                    fflush(stdout)
+                    break
+                }
                 
-                print("[DEBUG] Starting generation, max tokens: \(maxGenerated)...")
-                fflush(stdout)
+                var pieceBuffer: [CChar] = Array(repeating: 0, count: 512)
+                let pieceLen = llama_detokenize(vocab, &token, 1, &pieceBuffer, 512, false, false)
                 
-                while generated < maxGenerated {
-                    var token = llama_get_sampled_token_ith(ctx, 0)
+                if pieceLen > 0 {
+                    let bytes = pieceBuffer.prefix(Int(pieceLen)).map { UInt8(bitPattern: $0) }
+                    let piece = String(decoding: bytes, as: UTF8.self)
+                    result += piece
                     
-                    if token == eos {
-                        print("[DEBUG] EOS token reached at generation \(generated)")
+                    if generated % 50 == 0 {
+                        print("[DEBUG] Generated \(generated) tokens, current result: \"\(result.prefix(50))...\"")
                         fflush(stdout)
-                        break
                     }
-                    
-                    var pieceBuffer: [CChar] = Array(repeating: 0, count: 512)
-                    let pieceLen = llama_detokenize(ctx, &token, 1, &pieceBuffer, 512)
-                    
-                    if pieceLen > 0, let piece = String(validatingCString: &pieceBuffer) {
-                        result += piece
-                        
-                        if generated % 50 == 0 {
-                            print("[DEBUG] Generated \(generated) tokens, current result: \"\(result.prefix(50))...\"")
-                            fflush(stdout)
-                        }
-                    }
-                    
-                    batch.n_tokens = 1
-                    batchToken.pointee = token
-                    batchPos.pointee = Int32(Int(tokenCount) + generated)
-                    batchNS.pointee = 1
-                    batchSeq.pointee?.pointee = 0
-                    batchLogits.pointee = 0
-                    
-                    let ret = llama_decode(ctx, &batch)
-                    if ret != 0 {
-                        throw LLMError.generationFailed
-                    }
-                    
-                    generated += 1
                 }
                 
-                print("[DEBUG] Generation completed: \(generated) tokens, \(result.count) chars")
-                print("[DEBUG] Final result: \"\(result)\"")
-                fflush(stdout)
-            } else {
-                throw LLMError.generationFailed
+                batch.n_tokens = 1
+                batchToken.pointee = token
+                batchPos.pointee = Int32(Int(tokenCount) + generated)
+                batchNS.pointee = 1
+                batchSeq.pointee?.pointee = 0
+                batchLogits.pointee = 1
+                
+                let ret = llama_decode(ctx, &batch)
+                if ret != 0 {
+                    throw LLMError.generationFailed
+                }
+                
+                generated += 1
             }
+            
+            print("[DEBUG] Generation completed: \(generated) tokens, \(result.count) chars")
+            print("[DEBUG] Final result: \"\(result)\"")
+            fflush(stdout)
+        } else {
+            throw LLMError.generationFailed
         }
         
         return result
+    }
+    
+    private func greedySampleFromLogits(ctx: OpaquePointer, vocabSize: Int) -> llama_token {
+        guard let logits = llama_get_logits(ctx) else {
+            return llama_token_null
+        }
+        
+        var bestToken: llama_token = 0
+        var bestLogit = -Float.greatestFiniteMagnitude
+        for i in 0..<vocabSize {
+            let value = logits.advanced(by: i).pointee
+            if value > bestLogit {
+                bestLogit = value
+                bestToken = llama_token(i)
+            }
+        }
+        return bestToken
     }
 }
 

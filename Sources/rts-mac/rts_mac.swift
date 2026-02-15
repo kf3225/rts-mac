@@ -56,6 +56,9 @@ class SpeechAnalyzerImpl: NSObject {
     private let speechRecognizer: SFSpeechRecognizer?
     private let speechAnalyzer: Speech.SpeechAnalyzer?
     private let config: CLIConfig
+    private var provisionalCorrectionTask: Task<Void, Never>?
+    private var latestPartialText = ""
+    private var lastProvisionalOutput = ""
 
     init(config: CLIConfig) {
         self.speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "ja-JP"))
@@ -140,15 +143,48 @@ class SpeechAnalyzerImpl: NSObject {
         let text = result.bestTranscription.formattedString
 
         if result.isFinal {
+            provisionalCorrectionTask?.cancel()
+            provisionalCorrectionTask = nil
+            latestPartialText = ""
+            lastProvisionalOutput = ""
             let corrected = await LLMCorrectionService.shared.correctText(text)
-            print("\n\(corrected)")
+            print("\n---")
+            print("元のテキスト: \(text)")
+            print("補正後テキスト: \(corrected)")
+            print("---")
         } else {
             print("\r\(text)", terminator: "")
+            if config.llmCorrect {
+                scheduleProvisionalCorrection(for: text)
+            }
         }
         fflush(stdout)
     }
 
+    private func scheduleProvisionalCorrection(for text: String) {
+        latestPartialText = text
+        provisionalCorrectionTask?.cancel()
+        provisionalCorrectionTask = Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard !Task.isCancelled else { return }
+            let snapshot = self.latestPartialText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !snapshot.isEmpty else { return }
+
+            let corrected = await LLMCorrectionService.shared.correctText(snapshot)
+            guard !Task.isCancelled else { return }
+            guard self.latestPartialText == snapshot else { return }
+            guard corrected != self.lastProvisionalOutput else { return }
+
+            self.lastProvisionalOutput = corrected
+            print("\n[暫定補正] \(corrected)")
+            fflush(stdout)
+        }
+    }
+
     private func stopRecognition() {
+        provisionalCorrectionTask?.cancel()
+        provisionalCorrectionTask = nil
         audioEngine?.stop()
         audioEngine?.inputNode.removeTap(onBus: 0)
         recognitionRequest?.endAudio()
@@ -167,6 +203,9 @@ class SpeechRecognizerImpl: NSObject {
     private let speechRecognizer: SFSpeechRecognizer?
     private let config: CLIConfig
     private var lastText = ""
+    private var provisionalCorrectionTask: Task<Void, Never>?
+    private var latestPartialText = ""
+    private var lastProvisionalOutput = ""
 
     init(config: CLIConfig) {
         self.speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "ja-JP"))
@@ -258,6 +297,10 @@ class SpeechRecognizerImpl: NSObject {
         lastText = text
         
         if isFinal {
+            provisionalCorrectionTask?.cancel()
+            provisionalCorrectionTask = nil
+            latestPartialText = ""
+            lastProvisionalOutput = ""
             if config.llmCorrect {
                 print("[DEBUG] 発話完了、LLM補正を開始...")
                 fflush(stdout)
@@ -275,6 +318,7 @@ class SpeechRecognizerImpl: NSObject {
         } else {
             if config.llmCorrect {
                 print("\r[認識中...]\(text)", terminator: "")
+                scheduleProvisionalCorrection(for: text)
             } else {
                 print("\r\(text)", terminator: "")
             }
@@ -282,7 +326,30 @@ class SpeechRecognizerImpl: NSObject {
         fflush(stdout)
     }
 
+    private func scheduleProvisionalCorrection(for text: String) {
+        latestPartialText = text
+        provisionalCorrectionTask?.cancel()
+        provisionalCorrectionTask = Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard !Task.isCancelled else { return }
+            let snapshot = self.latestPartialText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !snapshot.isEmpty else { return }
+
+            let corrected = await LLMCorrectionService.shared.correctText(snapshot)
+            guard !Task.isCancelled else { return }
+            guard self.latestPartialText == snapshot else { return }
+            guard corrected != self.lastProvisionalOutput else { return }
+
+            self.lastProvisionalOutput = corrected
+            print("\n[暫定補正] \(corrected)")
+            fflush(stdout)
+        }
+    }
+
     private func stopRecognition() {
+        provisionalCorrectionTask?.cancel()
+        provisionalCorrectionTask = nil
         audioEngine?.stop()
         audioEngine?.inputNode.removeTap(onBus: 0)
         recognitionRequest?.endAudio()
